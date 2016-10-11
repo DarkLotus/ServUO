@@ -16,6 +16,9 @@ using System.Text;
 
 using Microsoft.CSharp;
 using Microsoft.VisualBasic;
+using Microsoft.CodeAnalysis.MSBuild;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Emit;
 #endregion
 
 namespace Server
@@ -141,8 +144,53 @@ namespace Server
 		{
 			return CompileCSScripts(debug, true, out assembly);
 		}
+        private static bool RosylnBuild(bool debug, bool cache, out Assembly assembly)
+        {
 
-		public static bool CompileCSScripts(bool debug, bool cache, out Assembly assembly)
+            bool success = true;
+
+            MSBuildWorkspace workspace = MSBuildWorkspace.Create();
+            Solution solution = workspace.OpenSolutionAsync("ServUO.sln").Result;
+            ProjectDependencyGraph projectGraph = solution.GetProjectDependencyGraph();
+            Dictionary<string, Stream> assemblies = new Dictionary<string, Stream>();
+
+            foreach (ProjectId projectId in projectGraph.GetTopologicallySortedProjects())
+            {
+                Compilation projectCompilation = solution.GetProject(projectId).GetCompilationAsync().Result;
+                if (null != projectCompilation && !string.IsNullOrEmpty(projectCompilation.AssemblyName))
+                {
+                    if (!projectCompilation.AssemblyName.Equals("Scripts.CS"))
+                        continue;
+                    using (var stream = new MemoryStream())
+                    {
+                        EmitResult result = projectCompilation.Emit(stream);
+                        if (result.Success)
+                        {
+                            string fileName = string.Format("{0}.dll", projectCompilation.AssemblyName);
+
+                            using (FileStream file = File.Create("Scripts\\Output" + '\\' + fileName))
+                            {
+                                stream.Seek(0, SeekOrigin.Begin);
+                                stream.CopyTo(file);
+                            }
+                        }
+                        else
+                        {
+                            success = false;
+                        }
+
+                    }
+                }
+                else
+                {
+                    success = false;
+                }
+            }
+            assembly = Assembly.LoadFrom("Scripts/Output/Scripts.CS.dll");
+            return success;
+        }
+
+        public static bool CompileCSScripts(bool debug, bool cache, out Assembly assembly)
 		{
 			Utility.PushColor(ConsoleColor.Green);
 			Console.Write("Scripts: Compiling C# scripts...");
@@ -211,75 +259,7 @@ namespace Server
 			}
 
 			DeleteFiles("Scripts.CS*.dll");
-
-			using (CSharpCodeProvider provider = new CSharpCodeProvider())
-			{
-				string path = GetUnusedPath("Scripts.CS");
-
-				CompilerParameters parms = new CompilerParameters(GetReferenceAssemblies(), path, debug);
-
-				string options = GetCompilerOptions(debug);
-
-				if (options != null)
-				{
-					parms.CompilerOptions = options;
-				}
-
-				if (Core.HaltOnWarning)
-				{
-					parms.WarningLevel = 4;
-				}
-
-#if !MONO
-				CompilerResults results = provider.CompileAssemblyFromFile(parms, files);
-#else
-				parms.CompilerOptions = String.Format( "{0} /nowarn:169,219,414 /recurse:Scripts/*.cs", parms.CompilerOptions );
-				CompilerResults results = provider.CompileAssemblyFromFile( parms, "" );
-                #endif
-				m_AdditionalReferences.Add(path);
-
-				Display(results);
-
-#if !MONO
-				if (results.Errors.Count > 0)
-				{
-					assembly = null;
-					return false;
-				}
-#else
-				if( results.Errors.Count > 0 ) {
-					foreach( CompilerError err in results.Errors ) {
-						if ( !err.IsWarning ) {
-							assembly = null;
-							return false;
-						}
-					}
-				}
-                #endif
-
-				if (cache && Path.GetFileName(path) == "Scripts.CS.dll")
-				{
-					try
-					{
-						var hashCode = GetHashCode(path, files, debug);
-
-						using (
-							FileStream fs = new FileStream(
-								"Scripts/Output/Scripts.CS.hash", FileMode.Create, FileAccess.Write, FileShare.None))
-						{
-							using (BinaryWriter bin = new BinaryWriter(fs))
-							{
-								bin.Write(hashCode, 0, hashCode.Length);
-							}
-						}
-					}
-					catch
-					{ }
-				}
-
-				assembly = results.CompiledAssembly;
-				return true;
-			}
+            return RosylnBuild(debug, cache, out assembly);
 		}
 
 		public static bool CompileVBScripts(out Assembly assembly)
