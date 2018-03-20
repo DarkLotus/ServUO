@@ -154,7 +154,6 @@ namespace Server.Engines.VendorSearching
             {
                 if (!VendorSearch.CanSearch(User))
                 {
-                    User.CloseGump(typeof(VendorSearchGump));
                     User.SendLocalizedMessage(1154680); //Before using vendor search, you must be in a justice region or a safe log-out location (such as an inn or a house which has you on its Owner, Co-owner, or Friends list). 
                     return;
                 }
